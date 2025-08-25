@@ -49,25 +49,23 @@ async def cmd_restart(event):
     await event.respond("🔄 Restarting bot...")
     os.execv(sys.executable, [sys.executable] + sys.argv)
 
-@bot.on(events.NewMessage(pattern=r'/addgroup (.+)'))
+@bot.on(events.NewMessage(pattern=r'^/addgroup (\-?\d+)$'))
 @admin_only
 async def cmd_addgroup(event):
-    try:
-        gid = int(event.pattern_match.group(1).strip())
-        TARGET_GROUPS.append(gid)
-        await event.respond(f"✅ Added group {gid}")
-    except:
-        await event.respond("Invalid group ID.")
+    group_id = int(event.pattern_match.group(1))
+    TARGET_GROUPS.append(group_id)
+    await event.respond(f"✅ Added group {group_id}")
 
-@bot.on(events.NewMessage(pattern=r'/removegroup (.+)'))
+
+@bot.on(events.NewMessage(pattern=r'^/removegroup (\-?\d+)$'))
 @admin_only
 async def cmd_removegroup(event):
-    try:
-        gid = int(event.pattern_match.group(1).strip())
-        TARGET_GROUPS.remove(gid)
-        await event.respond(f"✅ Removed group {gid}")
-    except:
-        await event.respond("Group not found in list.")
+    group_id = int(event.pattern_match.group(1))
+    if group_id in TARGET_GROUPS:
+        TARGET_GROUPS.remove(group_id)
+        await event.respond(f"✅ Removed group {group_id}")
+    else:
+        await event.respond("This group ID isn't in the list.")
 
 @bot.on(events.NewMessage(pattern='/listgroups'))
 @admin_only
