@@ -1,69 +1,102 @@
-import random
-import time
 import asyncio
+import random
 from telethon import TelegramClient, events
+from telethon.sessions import StringSession
 
-api_id = '28119255'  
-api_hash = '337f330b7ab0c169c6296bc80338c6fd'   
-phone_number = '+6283185102534'
+# Bot credentials
+BOT_API_ID = 123456  
+BOT_API_HASH = 'abcdef1234567890abcdef1234567890'
+BOT_TOKEN = '123456:ABC-DEF...'
 
-TARGET_GROUPS = ['@botkontol_eror', -1003031999070]
+# Forwarding targets
+TARGET_GROUPS = [-1001234567890, -1009876543210]
 
-# Initialize the client
-client = TelegramClient('auto_forward_bot', api_id, api_hash)
+# Store user sessions
+user_sessions = {}
 
+# Define admins
+ADMIN_IDS = {111111111, 222222222}  # Replace with actual admin IDs
 
-is_forwarding_active = False
+def admin_only(func):
+    async def wrapper(event):
+        if event.sender_id not in ADMIN_IDS:
+            await event.respond("⛔ You are not authorized to use this command.")
+            return
+        return await func(event)
+    return wrapper
 
-async def forward_random_message():
-    global is_forwarding_active
-    group_index = 0
+bot = TelegramClient('bot_session', BOT_API_ID, BOT_API_HASH).start(bot_token=BOT_TOKEN)
 
-    while is_forwarding_active:
-        saved_messages = await client.get_messages('me', limit=10)
-        if saved_messages:
-            msg = random.choice(saved_messages)
-            target = TARGET_GROUPS[group_index]
+@bot.on(events.NewMessage(pattern='/addme'))
+@admin_only
+async def on_addme(event):
+    user = event.sender_id
+    async def prompt(msg):
+        await event.respond(msg)
+        resp = await bot.wait_for_new_message(from_users=user)
+        return resp.text
 
-            # Properly forward the message (preserves original headers and formatting)
-            await client.forward_messages(
-                target,
-                msg.id,
-                from_peer='me'  # Source is your 'Saved Messages' (Saved Messages = 'me')
-            )
-            print(f"Forwarded message ID {msg.id} to {target}")
+    api_id = int(await prompt("Send API ID:"))
+    api_hash = await prompt("Send API Hash:")
+    phone = await prompt("Send your phone number (+country code):")
+    await event.respond("Logging in...")
 
-            # Toggle which group to forward to next
-            group_index = 1 - group_index
+    client = TelegramClient(StringSession(), api_id, api_hash)
+    await client.connect()
 
-            # Wait for a random interval between 5 and 30 minutes
-            await asyncio.sleep(random.randint(20, 60))
+    if not await client.is_user_authorized():
+        await client.send_code_request(phone)
+        code = await prompt("Enter the login code:")
+        try:
+            await client.sign_in(phone, code)
+        except Exception:
+            password = await prompt("2FA required. Enter your password:")
+            await client.sign_in(password=password)
 
-@client.on(events.NewMessage(pattern='/start'))
-async def start_forwarding(event):
-    global is_forwarding_active
-    if not is_forwarding_active:
-        is_forwarding_active = True
-        await event.respond("Forwarding started...")
-        asyncio.get_event_loop().create_task(forward_random_message())
-    else:
-        await event.respond("Forwarding is already running.")
+    user_sessions[user] = (client.session.save(), api_id, api_hash)
+    await event.respond("✅ Session stored successfully.")
+    await client.disconnect()
 
-@client.on(events.NewMessage(pattern='/stop'))
-async def stop_forwarding(event):
-    global is_forwarding_active
-    if is_forwarding_active:
-        is_forwarding_active = False
-        await event.respond("Forwarding stopped.")
-    else:
-        await event.respond("No forwarding process is running.")
+@bot.on(events.NewMessage(pattern='/startuser'))
+@admin_only
+async def on_startuser(event):
+    user = event.sender_id
+    if user not in user_sessions:
+        return await event.respond("No session found. Use /addme first.")
+    await event.respond("Starting your userbot...")
+    asyncio.create_task(user_forward_bot(user))
+
+async def user_forward_bot(user):
+    session_str, api_id, api_hash = user_sessions[user]
+    client = TelegramClient(StringSession(session_str), api_id, api_hash)
+
+    @client.on(events.NewMessage(pattern='/start', from_users=user))
+    async def s(e):
+        await e.respond("Forwarding started.")
+        client.is_forward_active = True
+
+    @client.on(events.NewMessage(pattern='/stop', from_users=user))
+    async def s2(e):
+        await e.respond("Forwarding stopped.")
+        client.is_forward_active = False
+
+    await client.start()
+    client.is_forward_active = False
+    group_idx = 0
+
+    while True:
+        if getattr(client, 'is_forward_active', False):
+            msgs = await client.get_messages('me', limit=10)
+            if msgs:
+                msg = random.choice(msgs)
+                await client.forward_messages(TARGET_GROUPS[group_idx], msg)
+                group_idx = 1 - group_idx
+            await asyncio.sleep(random.randint(300, 1800))
+        else:
+            await asyncio.sleep(5)
 
 async def main():
-    await client.start(phone_number)
-    print("Logged in successfully.")
-    await client.run_until_disconnected()
+    await bot.run_until_disconnected()
 
 if __name__ == '__main__':
-    import asyncio
     asyncio.run(main())
-
