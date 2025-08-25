@@ -40,8 +40,8 @@ async def cmd_startuser(event):
 
     await event.respond("Please provide the user ID to start forwarding:")
     async with bot.conversation(user) as conv:
-        response = await conv.get_response()
         try:
+            response = await conv.wait_event(events.NewMessage(from_users=user))
             target_user_id = int(response.text)
             if target_user_id not in user_sessions:
                 await conv.send_message("User ID not found in sessions.")
