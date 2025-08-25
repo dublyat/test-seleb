@@ -11,23 +11,38 @@ BOT_TOKEN = '7802435088:AAHcwYbO1nFpz4jZljkwy4Xm9Nr9GRfpV2Y'
 
 ADMIN_IDS = {5087266104}
 
-# In-memory stores
-user_sessions = {}    # user_id -> (session_str, api_id, api_hash)
-TARGET_GROUPS = []    # Dynamic list of forwarding target group IDs
-forward_tasks = {}    # user_id -> asyncio.Task reference
+# Runtime storage
+user_sessions = {}     # user_id -> (session_str, api_id, api_hash)
+TARGET_GROUPS = []     # List of group IDs for forwarding
+forward_tasks = {}     # user_id -> asyncio.Task (retains task refs)
 
 bot = TelegramClient('bot_session', BOT_API_ID, BOT_API_HASH)
 
 def admin_only(func):
     async def wrapper(event):
         if event.sender_id not in ADMIN_IDS:
-            await event.respond("⛔ Unauthorized access.")
+            await event.respond("⛔ You are not authorized to use this command.")
             return
         return await func(event)
     return wrapper
 
-# --- Admin Commands ---
+# --- Help Interface via /start ---
+@bot.on(events.NewMessage(pattern='/start'))
+async def cmd_start(event):
+    help_text = (
+        "**Welcome! Here's what I can do:**\n\n"
+        "**Admin Commands:**\n"
+        "/addme — Store your user session (API ID/Hash and phone).\n"
+        "/startuser — Start forwarding from your saved messages.\n"
+        "/addgroup <group_id> — Add a target group for forwarding.\n"
+        "/removegroup <group_id> — Remove a group from targets.\n"
+        "/listgroups — Show all target groups.\n"
+        "/restart — Restart the bot (admin only).\n\n"
+        "__After starting your userbot, in your personal Telegram__: Send `/start` to begin forwarding and `/stop` to halt it."
+    )
+    await event.respond(help_text)
 
+# --- Admin-only Controls ---
 @bot.on(events.NewMessage(pattern='/restart'))
 @admin_only
 async def cmd_restart(event):
@@ -40,7 +55,7 @@ async def cmd_addgroup(event):
     try:
         gid = int(event.pattern_match.group(1).strip())
         TARGET_GROUPS.append(gid)
-        await event.respond(f"Added group: {gid}")
+        await event.respond(f"✅ Added group {gid}")
     except:
         await event.respond("Invalid group ID.")
 
@@ -50,7 +65,7 @@ async def cmd_removegroup(event):
     try:
         gid = int(event.pattern_match.group(1).strip())
         TARGET_GROUPS.remove(gid)
-        await event.respond(f"Removed group: {gid}")
+        await event.respond(f"✅ Removed group {gid}")
     except:
         await event.respond("Group not found in list.")
 
@@ -58,54 +73,54 @@ async def cmd_removegroup(event):
 @admin_only
 async def cmd_listgroups(event):
     msg = "None" if not TARGET_GROUPS else "\n".join(map(str, TARGET_GROUPS))
-    await event.respond(f"Forward Target Groups:\n{msg}")
+    await event.respond(f"**Forward Targets:**\n{msg}")
 
 @bot.on(events.NewMessage(pattern='/addme'))
 @admin_only
 async def cmd_addme(event):
     user = event.sender_id
-    async def prompt(msg):
-        await event.respond(msg)
-        resp = await bot.wait_for_new_message(from_users=user)
-        return resp.text
+    async with bot.conversation(user) as conv:
+        await conv.send_message("Enter your API ID:")
+        api_id = int((await conv.get_response()).text)
+        await conv.send_message("Enter your API Hash:")
+        api_hash = (await conv.get_response()).text
+        await conv.send_message("Enter your phone (+country code):")
+        phone = (await conv.get_response()).text
+        await conv.send_message("Logging in...")
 
-    api_id = int(await prompt("Enter API ID:"))
-    api_hash = await prompt("Enter API Hash:")
-    phone = await prompt("Enter phone number (+...):")
-    await event.respond("Logging in user...")
+        client = TelegramClient(StringSession(), api_id, api_hash)
+        await client.connect()
+        if not await client.is_user_authorized():
+            await client.send_code_request(phone)
+            await conv.send_message("Enter the code you received:")
+            code = (await conv.get_response()).text
+            try:
+                await client.sign_in(phone, code)
+            except:
+                await conv.send_message("2FA required. Enter your password:")
+                pwd = (await conv.get_response()).text
+                await client.sign_in(password=pwd)
 
-    client = TelegramClient(StringSession(), api_id, api_hash)
-    await client.connect()
-    if not await client.is_user_authorized():
-        await client.send_code_request(phone)
-        code = await prompt("Enter the code you received:")
-        try:
-            await client.sign_in(phone, code)
-        except:
-            pwd = await prompt("2FA password required, please enter:")
-            await client.sign_in(password=pwd)
-
-    user_sessions[user] = (client.session.save(), api_id, api_hash)
-    await event.respond("✅ User session stored successfully.")
-    await client.disconnect()
+        user_sessions[user] = (client.session.save(), api_id, api_hash)
+        await conv.send_message("✅ Session stored.")
+        await client.disconnect()
 
 @bot.on(events.NewMessage(pattern='/startuser'))
 @admin_only
 async def cmd_startuser(event):
     user = event.sender_id
     if user not in user_sessions:
-        await event.respond("No session found. Use /addme first.")
+        await event.respond("No session found. Use `/addme` first.")
         return
     if user in forward_tasks:
-        await event.respond("Userbot already active.")
+        await event.respond("Userbot forwarding already running.")
         return
 
     task = asyncio.create_task(user_forward_loop(user))
     forward_tasks[user] = task
-    await event.respond("▶ Userbot forwarding has started.")
+    await event.respond("▶ Userbot forwarding started! Control it via `/start` / `/stop` from your account.")
 
-# --- Forwarding Logic ---
-
+# --- Forwarding Loop --- 
 async def user_forward_loop(user):
     session_str, api_id, api_hash = user_sessions[user]
     client = TelegramClient(StringSession(session_str), api_id, api_hash)
@@ -114,14 +129,14 @@ async def user_forward_loop(user):
     idx = 0
 
     @client.on(events.NewMessage(pattern='/start', from_users=user))
-    async def start_forward(e):
+    async def start_fwd(e):
         client.is_active = True
-        await e.respond("Forwarding activated.")
+        await e.respond("⏯ Forwarding started.")
 
     @client.on(events.NewMessage(pattern='/stop', from_users=user))
-    async def stop_forward(e):
+    async def stop_fwd(e):
         client.is_active = False
-        await e.respond("Forwarding paused.")
+        await e.respond("⏹ Forwarding stopped.")
 
     while True:
         if client.is_active and TARGET_GROUPS:
@@ -135,8 +150,8 @@ async def user_forward_loop(user):
         else:
             await asyncio.sleep(5)
 
+# --- Bot Entrypoint ---
 async def main():
-    # Everything runs in this one loop. No other loops anywhere.
     await bot.start(bot_token=BOT_TOKEN)
     await bot.run_until_disconnected()
 
