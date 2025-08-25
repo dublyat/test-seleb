@@ -5,11 +5,11 @@ import random
 from telethon import TelegramClient, events
 from telethon.sessions import StringSession
 
-BOT_API_ID = 123456
-BOT_API_HASH = 'your_bot_api_hash'
-BOT_TOKEN = '123456:ABC-DEF...' 
+BOT_API_ID = '24565808'
+BOT_API_HASH = '4eb74502af26e86c3571225a29243e3e'
+BOT_TOKEN = '7802435088:AAHcwYbO1nFpz4jZljkwy4Xm9Nr9GRfpV2Y' 
 
-ADMIN_IDS = {111111111, 222222222}
+ADMIN_IDS = {5087266104}
 
 user_sessions = {} 
 TARGET_GROUPS = [] 
@@ -146,7 +146,7 @@ async def user_forward_bot(user):
                 print(f"[User {user}] forwarded message {msg.id} to {target}")
                 group_idx += 1
 
-            delay = random.randint(300, 1800)
+            delay = random.randint(30, 60)
             await asyncio.sleep(delay)
         else:
             await asyncio.sleep(5)
