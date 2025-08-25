@@ -37,7 +37,7 @@ async def forward_random_message():
             group_index = 1 - group_index
 
             # Wait for a random interval between 5 and 30 minutes
-            await asyncio.sleep(random.randint(300, 1800))
+            await asyncio.sleep(random.randint(20, 60))
 
 @client.on(events.NewMessage(pattern='/start'))
 async def start_forwarding(event):
