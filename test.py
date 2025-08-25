@@ -11,130 +11,96 @@ BOT_TOKEN = '7802435088:AAHcwYbO1nFpz4jZljkwy4Xm9Nr9GRfpV2Y'
 
 ADMIN_IDS = {5087266104}
 
-# --- In-Memory Storage ---
-user_sessions = {}       # user_id -> (session_str, api_id, api_hash)
-TARGET_GROUPS = []
-forward_tasks = {}       # user_id -> task
+TARGET_GROUPS = []  # Will be dynamically modified
+user_sessions = {}  # user_id -> (session_str, api_id, api_hash)
+forward_tasks = {}  # user_id -> asyncio.Task
+
+bot = TelegramClient('bot_session', BOT_API_ID, BOT_API_HASH)
 
 def admin_only(func):
     async def wrapper(event):
         if event.sender_id not in ADMIN_IDS:
-            await event.respond("⛔ Unauthorized.")
+            await event.respond("⛔ Not authorized.")
             return
         return await func(event)
     return wrapper
 
-bot = TelegramClient('bot_session', BOT_API_ID, BOT_API_HASH).start(bot_token=BOT_TOKEN)
-
 @bot.on(events.NewMessage(pattern='/restart'))
 @admin_only
-async def restart_handler(event):
+async def cmd_restart(event):
     await event.respond("🔄 Restarting bot...")
     os.execv(sys.executable, [sys.executable] + sys.argv)
 
 @bot.on(events.NewMessage(pattern=r'/addgroup (.+)'))
 @admin_only
-async def add_group(event):
-    gid = event.pattern_match.group(1).strip()
+async def cmd_addgroup(event):
     try:
-        TARGET_GROUPS.append(int(gid))
-        await event.respond(f"✅ Added group {gid}")
-    except ValueError:
-        await event.respond("Invalid ID.")
+        gid = int(event.pattern_match.group(1).strip())
+        TARGET_GROUPS.append(gid)
+        await event.respond(f"Group {gid} added.")
+    except:
+        await event.respond("Invalid group ID.")
 
 @bot.on(events.NewMessage(pattern=r'/removegroup (.+)'))
 @admin_only
-async def remove_group(event):
-    gid = event.pattern_match.group(1).strip()
+async def cmd_removegroup(event):
     try:
-        TARGET_GROUPS.remove(int(gid))
-        await event.respond(f"✅ Removed group {gid}")
-    except (ValueError, KeyError):
-        await event.respond("Not in list.")
+        gid = int(event.pattern_match.group(1).strip())
+        TARGET_GROUPS.remove(gid)
+        await event.respond(f"Group {gid} removed.")
+    except:
+        await event.respond("That group isn't in the list.")
 
 @bot.on(events.NewMessage(pattern='/listgroups'))
 @admin_only
-async def list_groups(event):
-    text = "No groups set." if not TARGET_GROUPS else "\n".join(str(g) for g in TARGET_GROUPS)
-    await event.respond("Groups:\n" + text)
+async def cmd_listgroups(event):
+    if not TARGET_GROUPS:
+        await event.respond("No target groups set.")
+    else:
+        await event.respond("Current groups:\n" + "\n".join(map(str, TARGET_GROUPS)))
 
 @bot.on(events.NewMessage(pattern='/addme'))
 @admin_only
-async def on_addme(event):
+async def cmd_addme(event):
     user = event.sender_id
     async def prompt(msg):
         await event.respond(msg)
         res = await bot.wait_for_new_message(from_users=user)
         return res.text
 
-    api_id = int(await prompt("Send API ID:"))
-    api_hash = await prompt("Send API Hash:")
-    phone = await prompt("Phone number with country code:")
+    api_id = int(await prompt("API ID?"))
+    api_hash = await prompt("API Hash?")
+    phone = await prompt("Phone number (+...)?")
     await event.respond("Logging in...")
 
     client = TelegramClient(StringSession(), api_id, api_hash)
     await client.connect()
     if not await client.is_user_authorized():
         await client.send_code_request(phone)
-        code = await prompt("Enter code:")
+        code = await prompt("Enter received code:")
         try:
             await client.sign_in(phone, code)
         except:
-            pwd = await prompt("2FA password:")
+            pwd = await prompt("Enter 2FA password:")
             await client.sign_in(password=pwd)
 
-    sess = client.session.save()
-    user_sessions[user] = (sess, api_id, api_hash)
-    await event.respond("✅ Logged in and session stored.")
+    user_sessions[user] = (client.session.save(), api_id, api_hash)
+    await event.respond("Logged in and session stored.")
     await client.disconnect()
 
 @bot.on(events.NewMessage(pattern='/startuser'))
 @admin_only
-async def on_startuser(event):
+async def cmd_startuser(event):
     user = event.sender_id
     if user not in user_sessions:
-        await event.respond("No session. Use /addme.")
-        return
-    if user not in forward_tasks:
+        await event.respond("No session found. Use /addme.")
+    elif user in forward_tasks:
+        await event.respond("Forwarding already running.")
+    else:
         task = asyncio.create_task(user_forward_loop(user))
         forward_tasks[user] = task
-        await event.respond("▶ Userbot started.")
-    else:
-        await event.respond("Userbot already running.")
+        await event.respond("Userbot started.")
 
 async def user_forward_loop(user):
     session_str, api_id, api_hash = user_sessions[user]
-    client = TelegramClient(StringSession(session_str), api_id, api_hash)
-
-    @client.on(events.NewMessage(pattern='/start', from_users=user))
-    async def start_fwd(e):
-        client.is_forward_active = True
-        await e.respond("Forwarding started.")
-
-    @client.on(events.NewMessage(pattern='/stop', from_users=user))
-    async def stop_fwd(e):
-        client.is_forward_active = False
-        await e.respond("Forwarding stopped.")
-
-    await client.start()
-    client.is_forward_active = False
-    idx = 0
-
-    while True:
-        if getattr(client, 'is_forward_active', False) and TARGET_GROUPS:
-            msgs = await client.get_messages('me', limit=10)
-            if msgs:
-                msg = random.choice(msgs)
-                group = TARGET_GROUPS[idx % len(TARGET_GROUPS)]
-                await client.forward_messages(group, msg)
-                print(f"[{user}] forwarded {msg.id} to {group}")
-                idx += 1
-            await asyncio.sleep(random.randint(300, 1800))
-        else:
-            await asyncio.sleep(5)
-
-async def main():
-    await bot.run_until_disconnected()
-
-if __name__ == '__main__':
-    asyncio.run(main())
+    client = TelegramClient
