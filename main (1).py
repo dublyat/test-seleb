@@ -68,36 +68,47 @@ async def handle_session_flow(event):
         return
 
     state = user_states[user_id]
+    text = event.raw_text.strip()
 
+    # Step: Phone input
     if state["step"] == "awaiting_phone":
-        phone = event.raw_text.strip()
-        state["phone"] = phone
+        state["phone"] = text
         state["session"] = StringSession()
         state["client"] = TelegramClient(state["session"], BOT_API_ID, BOT_API_HASH)
+        client = state["client"]
 
         try:
-            await state["client"].connect()
-            await state["client"].send_code_request(phone)
+            await client.connect()
+            if not client.is_connected():
+                raise Exception("Could not connect to Telegram.")
+
+            await client.send_code_request(text)
             state["step"] = "awaiting_code"
             await event.reply("📨 Code sent! Please enter the **login code**.")
         except PhoneNumberInvalidError:
-            await event.reply("❌ Invalid phone number. Please try `/gen` again.")
+            await event.reply("❌ Invalid phone number. Try `/gen` again.")
             user_states.pop(user_id)
         except Exception as e:
             await event.reply(f"❌ Error: {e}")
             user_states.pop(user_id)
 
+    # Step: Code input
     elif state["step"] == "awaiting_code":
-        code = event.raw_text.strip()
+        code = text
         phone = state["phone"]
+        client = state["client"]
+
         try:
-            await state["client"].sign_in(phone=phone, code=code)
+            if not client.is_connected():
+                await client.connect()
+
+            await client.sign_in(phone=phone, code=code)
             await finalize_session(user_id, event)
         except SessionPasswordNeededError:
             state["step"] = "awaiting_password"
-            await event.reply("🔐 2FA enabled. Please enter your **password**.")
+            await event.reply("🔐 2FA is enabled. Please enter your **password**.")
         except PhoneCodeInvalidError:
-            await event.reply("❌ Invalid code. Please try `/gen` again.")
+            await event.reply("❌ Invalid code. Try `/gen` again.")
             user_states.pop(user_id)
         except Exception as e:
             await event.reply(f"❌ Error: {e}")
